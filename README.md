@@ -1,9 +1,19 @@
 # rr_obsd
 
-Obsidian 插件工具箱（Tori's Obsidian plugin toolbox）。
+Tori 的 Obsidian 插件工具箱。
 
-> 项目立项中，敬请期待。
+## 定位
+
+- **[plugins/](./plugins/)** — 成品插件发布集合：在草稿沙盒中验证成熟的插件，最终收录于此
+- **[tools/](./tools/)** — Obsidian 实用工具杂集：CSS 片段、Templater / QuickAdd 脚本、批处理小工具
 
 ## 相关仓库
 
-- [obsidian_plugin_draft](https://github.com/tori-RR/obsidian_plugin_draft) — 插件立项前的草稿与测试沙盒
+| 仓库 | 角色 |
+|---|---|
+| [obsidian_plugin_draft](https://github.com/tori-RR/obsidian_plugin_draft)（私有） | 草稿沙盒：插件立项、试验、测试 |
+| [obsidian-vault-watch](https://github.com/tori-RR/obsidian-vault-watch) | 独立维护中的正式插件 |
+
+## License
+
+[MIT](./LICENSE)
