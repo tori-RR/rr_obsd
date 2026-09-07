@@ -31,13 +31,12 @@ npm run package    # 构建并打出可安装 zip（dist/）
 ```
 
 - 监听子系统（`lib/`、`native/watch.ps1`）的设计与验证记录见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 与 [docs/VALIDATION.md](docs/VALIDATION.md)
-- `tools/` 收录 Obsidian 实用工具杂集（CSS 片段、脚本等），与插件本体无关
+- [tools/](./tools/) 收录独立插件源（原 obsidian_plugin_draft 仓库迁入，独立版修改与测试在此进行）与 Obsidian 实用工具杂集
 
 ## 相关仓库
 
 | 仓库 | 角色 |
 |---|---|
-| [obsidian_plugin_draft](https://github.com/tori-RR/obsidian_plugin_draft)（私有） | 草稿沙盒：插件立项、试验、测试 |
 | [obsidian-vault-watch](https://github.com/tori-RR/obsidian-vault-watch) | Vault Watch 独立版（维护中） |
 
 ## License

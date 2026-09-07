@@ -1,0 +1,14 @@
+/node_modules/
+/main.js
+/dist/
+/coverage/
+/test-results/
+.env
+.env.*
+*.log
+*.bak
+*.key
+*.pem
+/data.json
+.DS_Store
+Thumbs.db
