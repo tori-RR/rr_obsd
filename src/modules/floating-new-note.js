@@ -46,7 +46,13 @@ class FloatingNewNoteModule {
       e.preventDefault();
       e.stopPropagation();
       const app = this.host.app;
-      const folder = (this.settings.targetFolder || "").replace(/^\/+|\/+$/g, "");
+      // 目标目录：active 模式取当前活动笔记的同级目录，取不到时回退到固定文件夹
+      let folder = "";
+      if ((this.settings.targetFolderMode ?? "active") === "active") {
+        const active = app.workspace.getActiveFile?.();
+        if (active?.parent) folder = active.parent.path === "/" ? "" : active.parent.path;
+      }
+      if (!folder) folder = (this.settings.targetFolder || "").replace(/^\/+|\/+$/g, "");
       try {
         if (folder && !app.vault.getAbstractFileByPath(folder)) {
           await app.vault.createFolder(folder);
@@ -107,7 +113,20 @@ class FloatingNewNoteModule {
         this.injectAll();
       })
     );
-    new Setting(containerEl).setName("目标文件夹").setDesc("新建笔记保存路径（相对 vault 根）。默认 New；留空则写到根目录").addText(
+    new Setting(containerEl).setName("目标文件夹模式").setDesc("同级目录：新建到当前活动笔记所在文件夹；固定文件夹：始终使用下方路径").addDropdown(
+      (d) => d.addOption("active", "当前笔记同级目录").addOption("static", "固定文件夹")
+        .setValue(settings.targetFolderMode ?? "active")
+        .onChange(async (value) => {
+          settings.targetFolderMode = value;
+          await this.persist();
+          rerender();
+        })
+    );
+    new Setting(containerEl).setName("目标文件夹").setDesc(
+      settings.targetFolderMode === "static"
+        ? "新建笔记保存路径（相对 vault 根）。默认 New；留空则写到根目录"
+        : "回退目录：没有活动笔记时使用（默认 New；留空则写到根目录）"
+    ).addText(
       (t) => t.setPlaceholder("New").setValue(settings.targetFolder ?? "New").onChange(async (value) => {
         settings.targetFolder = value.trim();
         await this.persist();

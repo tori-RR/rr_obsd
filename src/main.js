@@ -20,6 +20,7 @@ const DEFAULTS = {
   fnn: {
     enabled: true,
     icon: "pen-box",
+    targetFolderMode: "active",
     targetFolder: "New",
     zoneSize: 120,
     fabSize: 56,
