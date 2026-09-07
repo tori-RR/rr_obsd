@@ -1,0 +1,10 @@
+{
+  "id": "rr_obsd",
+  "name": "RR Obsd Toolbox",
+  "version": "0.1.0",
+  "minAppVersion": "1.13.7",
+  "description": "表格行号 · 悬浮新建笔记 · NAS 原生监听刷新，一个插件全搞定（Table row numbers, floating new note, and native SMB/NAS vault refresh in one plugin）.",
+  "author": "tori-RR",
+  "authorUrl": "https://github.com/tori-RR",
+  "isDesktopOnly": true
+}

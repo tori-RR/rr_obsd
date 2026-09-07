@@ -1,0 +1,16 @@
+{
+  "name": "rr_obsd",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tori's Obsidian toolbox: table row numbers, floating new note, and native Windows change notifications for SMB/NAS vaults.",
+  "main": "main.js",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/*.test.cjs",
+    "check": "node --check src/main.js && node --check src/modules/vault-watch.js && node --check src/modules/table-row-number.js && node --check src/modules/floating-new-note.js && node --check lib/native-bridge.js && node --check lib/reconciler.js && npm test && npm run build",
+    "package": "npm run build && powershell.exe -NoProfile -NonInteractive -File scripts/package.ps1"
+  },
+  "engines": { "node": ">=22" },
+  "devDependencies": { "esbuild": "0.28.2" },
+  "license": "MIT"
+}

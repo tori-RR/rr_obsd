@@ -1,0 +1,175 @@
+/*
+ * RR Obsd Toolbox — Floating New Note 样式
+ */
+
+/* ======== 悬浮按钮 ======== */
+
+.fab-container {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: var(--fab-zone, 120px);
+  height: var(--fab-zone, 120px);
+  z-index: 50;
+  pointer-events: auto;
+
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+}
+
+.fab-btn {
+  width: var(--fab-size, 56px);
+  height: var(--fab-size, 56px);
+  border-radius: 50%;
+  margin: 0 0 var(--fab-offset-y, 24px) var(--fab-offset-x, 24px);
+
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+
+  opacity: var(--fab-opacity, 0);
+
+  transition: opacity 0.28s ease,
+              transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1),
+              box-shadow 0.22s ease;
+}
+
+.fab-container:hover .fab-btn {
+  opacity: var(--fab-hover-opacity, 0.4);
+}
+
+.fab-container:hover .fab-btn:hover {
+  opacity: var(--fab-active-opacity, 1);
+  transform: scale(var(--fab-hover-scale, 1.12));
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.38);
+}
+
+/* 点击收缩效果 */
+.fab-btn:active {
+  transform: scale(var(--fab-active-scale, 0.9)) !important;
+}
+
+.fab-btn svg {
+  width: 60%;
+  height: 60%;
+  stroke-width: 2;
+}
+
+/* ======== 图标选择器 ======== */
+
+.icon-picker-host {
+  width: 100%;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.icon-picker-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 260px;
+}
+
+.icon-picker-preview {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-normal);
+}
+
+.icon-picker-preview svg {
+  width: 20px;
+  height: 20px;
+}
+
+.icon-picker-input {
+  flex: 1;
+  min-width: 120px;
+  padding: 4px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--background-modifier-form-field);
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+}
+
+.icon-picker-input:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+}
+
+.icon-picker-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 36px;
+  width: 220px;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-primary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  padding: 4px 0;
+}
+
+.icon-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 10px;
+  cursor: pointer;
+  border-radius: 4px;
+  margin: 0 4px;
+}
+
+.icon-picker-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.icon-picker-row.is-selected {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.icon-picker-row.is-selected:hover {
+  background: var(--interactive-accent-hover);
+}
+
+.icon-picker-row-icon {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.icon-picker-row-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.icon-picker-row-name {
+  font-size: var(--font-ui-small);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.icon-picker-empty {
+  padding: 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
