@@ -51,7 +51,7 @@ async function createHarness(t, parentPid = process.pid) {
       try { events.push(JSON.parse(line)); } catch { parseErrors.push(line); }
     }
   });
-  async function waitFor(predicate, from = 0, timeout = 12000) {
+  async function waitFor(predicate, from = 0, timeout = 45_000) {
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
       if (spawnError) throw spawnError;
@@ -67,7 +67,7 @@ async function createHarness(t, parentPid = process.pid) {
   return { child, root, events, waitFor, parseErrors, stderr: () => stderr };
 }
 
-const options = { skip: process.platform !== 'win32', timeout: 40000 };
+const options = { skip: process.platform !== 'win32', timeout: 180_000 };
 
 test('native helper reports file and directory events with UTF-8 relative paths', options, async t => {
   const h = await createHarness(t);

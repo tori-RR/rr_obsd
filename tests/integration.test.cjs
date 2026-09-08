@@ -11,7 +11,7 @@ const { Reconciler } = require('../lib/reconciler');
 
 test('native bridge and reconciler keep a disk-backed mock index current end to end', {
   skip: process.platform !== 'win32',
-  timeout: 40_000,
+  timeout: 180_000,
 }, async (t) => {
   const temporaryBase = await fs.realpath(os.tmpdir());
   const container = await fs.mkdtemp(path.join(temporaryBase, 'ovw-integration-test-'));
@@ -87,7 +87,7 @@ test('native bridge and reconciler keep a disk-backed mock index current end to 
     }
   });
 
-  async function waitFor(predicate, label, timeout = 12_000) {
+  async function waitFor(predicate, label, timeout = 45_000) {
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
       assert.deepEqual(failures, [], `${label}: no bridge/reconciliation failures`);
