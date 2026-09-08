@@ -38,6 +38,16 @@ class VaultWatchModule {
       await this.restart();
     }});
     this.host.app.workspace.onLayoutReady(() => { if (!this.unloaded) void this.restart(); });
+    // 安全网：SMB 根监听不下发子目录文件的内容修改通知（TrueNAS 实测），
+    // 低频全量核对把内容更新的最坏滞留压到一个周期内。
+    if (typeof setInterval === 'function') {
+      this._safetyTimer = setInterval(() => {
+        if (!this.unloaded && this.settings.enabled && this.reconciler) {
+          void this.reconciler.rescan('safety').catch(() => this.fail());
+        }
+      }, 180000);
+      this._safetyTimer.unref?.();
+    }
     this.renderStatus();
   }
 
@@ -120,7 +130,8 @@ class VaultWatchModule {
   onunload() {
     this.unloaded = true;
     ++this.lifecycle;
-    clearTimeout(this._refreshTimer);
+    if (typeof clearTimeout === 'function') clearTimeout(this._refreshTimer);
+    if (typeof clearInterval === 'function') clearInterval(this._safetyTimer);
     this.reconciler?.stop();
     void this.bridge?.stop();
   }
@@ -173,7 +184,7 @@ class VaultWatchModule {
       }));
     new Setting(containerEl).setName('当前状态').setDesc(`${LABELS[this.status] || this.status}${this.lastErrorCode ? ` · ${this.lastErrorCode}` : ''}`)
       .addButton(button => button.setButtonText('重启监听').onClick(async () => { await this.restart(); rerender(); }));
-    containerEl.createEl('p', { text: '首次启动、断线恢复或通知溢出时核对文件列表。正常运行依靠文件事件，不定时扫描全库。' });
+    containerEl.createEl('p', { text: '首次启动、断线恢复或通知溢出时核对文件列表；内容修改每 3 分钟低频核对兜底。' });
   }
 }
 
