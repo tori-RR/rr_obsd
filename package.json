@@ -1,6 +1,6 @@
 {
   "name": "rr_obsd",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Tori's Obsidian toolbox: table row numbers, floating new note, and native Windows change notifications for SMB/NAS vaults.",
   "main": "main.js",

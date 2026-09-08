@@ -17,6 +17,7 @@ class VaultWatchModule {
     this.settings = settings;
     this.persist = persist;
     this.unloaded = false;
+    this._refreshTimer = null;
   }
 
   async onload() {
@@ -79,6 +80,7 @@ class VaultWatchModule {
           break;
         case 'change':
           engine.handleEvent({ type: message.kind, path: message.path, oldPath: message.oldPath });
+          if (message.kind === 'update') this.scheduleContentRefresh(message.path);
           break;
         case 'offline':
           engine.setOnline(false);
@@ -118,8 +120,42 @@ class VaultWatchModule {
   onunload() {
     this.unloaded = true;
     ++this.lifecycle;
+    clearTimeout(this._refreshTimer);
     this.reconciler?.stop();
     void this.bridge?.stop();
+  }
+
+  // Obsidian 对聚焦中的编辑器会推迟外部修改的重绘（切换笔记后才可见）。
+  // 这里在 update 事件后主动把活动编辑器刷成磁盘最新内容，恢复光标与滚动位置。
+  // vault.read 直读磁盘，不依赖索引生效时机；与原生行为相同，外部写入与
+  // 用户未保存输入竞态时以磁盘为准。
+  scheduleContentRefresh(relative) {
+    clearTimeout(this._refreshTimer);
+    this._refreshTimer = setTimeout(() => {
+      this._refreshTimer = null;
+      void this.refreshActiveEditor(relative);
+    }, 300);
+    this._refreshTimer.unref?.();
+  }
+
+  async refreshActiveEditor(relative) {
+    try {
+      const app = this.host.app;
+      const leaf = app.workspace.getMostRecentLeaf?.();
+      const view = leaf?.view;
+      if (!view || view.getViewType?.() !== 'markdown' || view.file?.path !== relative) return;
+      if (view.getMode?.() !== 'source' || !view.editor) return; // 阅读视图由 Obsidian 自行刷新
+      const file = app.vault.getAbstractFileByPath(relative);
+      if (!file || file.children) return; // 文件可能已被删除，或路径指向目录
+      const fresh = await app.vault.read(file);
+      const editor = view.editor;
+      if (editor.getValue() === fresh) return;
+      const selections = editor.listSelections();
+      const scroll = editor.getScrollInfo();
+      editor.setValue(fresh);
+      if (selections?.length) { try { editor.setSelections(selections); } catch { /* 光标恢复失败可忽略 */ } }
+      try { editor.scrollIntoView({ from: scroll.to ?? 0, to: scroll.to ?? 0 }); } catch { }
+    } catch { /* 内容刷新失败不影响监听主链路 */ }
   }
 
   renderSettings(containerEl, rerender = () => { containerEl.empty(); this.renderSettings(containerEl); }) {

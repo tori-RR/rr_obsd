@@ -155,6 +155,8 @@ async function createHarness(t, { manifestDir, configDir = '.obsidian', stored =
     },
     process: { platform: 'win32' },
     Date,
+    setTimeout,
+    clearTimeout,
   }, { filename: 'src/modules/vault-watch.js' });
   const manifest = { id: 'rr_obsd', ...(manifestDir ? { dir: manifestDir } : {}) };
   const settings = { ...loaded.exports.VAULT_WATCH_DEFAULTS, ...stored };
