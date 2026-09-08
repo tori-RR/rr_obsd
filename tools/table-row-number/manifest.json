@@ -1,9 +1,0 @@
-{
-  "id": "table-row-number",
-  "name": "Table Row Number",
-  "version": "1.0.0",
-  "minAppVersion": "1.0.0",
-  "author": "tori",
-  "description": "自动为表格行添加序号，带开关控制",
-  "isDesktopOnly": false
-}

@@ -6,8 +6,9 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
-const { Reconciler } = require('../lib/reconciler');
-const { createApplyPath } = require('../lib/obsidian-adapter');
+const { Reconciler } = require('../src/vault-watch/reconciler');
+const { createApplyPath } = require('../src/vault-watch/obsidian-adapter');
+const { EditorRefresh } = require('../src/vault-watch/editor-refresh');
 
 function deferred() {
   let resolve;
@@ -141,9 +142,10 @@ async function createHarness(t, { manifestDir, configDir = '.obsidian', stored =
   const dependencies = {
     obsidian: { Plugin: class {}, PluginSettingTab: class {}, Setting, Notice, normalizePath: (value) => value.replace(/\\/g, '/').normalize('NFC') },
     'node:path': path,
-    '../../lib/native-bridge': { NativeBridge: StubBridge },
-    '../../lib/reconciler': { Reconciler: MemoryReconciler },
-    '../../lib/obsidian-adapter': { createApplyPath },
+    '../vault-watch/native-bridge': { NativeBridge: StubBridge },
+    '../vault-watch/reconciler': { Reconciler: MemoryReconciler },
+    '../vault-watch/obsidian-adapter': { createApplyPath },
+    '../vault-watch/editor-refresh': { EditorRefresh },
   };
   const loaded = { exports: {} };
   const source = await fs.readFile(path.join(__dirname, '..', 'src', 'modules', 'vault-watch.js'), 'utf8');

@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { createApplyPath } = require('../lib/obsidian-adapter');
+const { createApplyPath } = require('../src/vault-watch/obsidian-adapter');
 
 test('refresh uses the queued real adapter reconciliation, preserving real filenames', async () => {
   const calls = [];

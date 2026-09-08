@@ -1,13 +1,14 @@
 'use strict';
 // Vault Watch — Windows 原生文件监听模块（自 obsidian-vault-watch v0.1.0 移植）。
-// 外部行为与独立插件保持一致：状态机、事件流、设置项名称均未改动。
+// The index pipeline and clean-editor loading have separate cancellation guards.
 const { Notice, Setting, normalizePath } = require('obsidian');
 const path = require('node:path');
-const { NativeBridge } = require('../../lib/native-bridge');
-const { Reconciler } = require('../../lib/reconciler');
-const { createApplyPath } = require('../../lib/obsidian-adapter');
+const { NativeBridge } = require('../vault-watch/native-bridge');
+const { Reconciler } = require('../vault-watch/reconciler');
+const { createApplyPath } = require('../vault-watch/obsidian-adapter');
+const { EditorRefresh } = require('../vault-watch/editor-refresh');
 
-const DEFAULTS = { enabled: true, showStatus: true, debounceMs: 200 };
+const DEFAULTS = { enabled: true, showStatus: true, debounceMs: 200, activeCheckSeconds: 5, safetyScanSeconds: 180 };
 const LABELS = { stopped: '已暂停', starting: '启动中', scanning: '核对中', watching: '监听中',
   online: '监听中', idle: '监听中', offline: '等待连接', error: '需要检查', unsupported: '仅支持 Windows' };
 
@@ -17,11 +18,17 @@ class VaultWatchModule {
     this.settings = settings;
     this.persist = persist;
     this.unloaded = false;
-    this._refreshTimer = null;
+    this._activeTimer = null;
+    this._safetyTimer = null;
+    this.timerEpoch = 0;
+    this.online = false;
   }
 
   async onload() {
     this.settings.debounceMs = Math.max(100, Math.min(1000, Number(this.settings.debounceMs) || DEFAULTS.debounceMs));
+    this.settings.activeCheckSeconds = Math.max(0, Math.min(30, Number(this.settings.activeCheckSeconds ?? DEFAULTS.activeCheckSeconds) || 0));
+    this.settings.safetyScanSeconds = Math.max(0, Math.min(600, Number(this.settings.safetyScanSeconds ?? DEFAULTS.safetyScanSeconds) || 0));
+    if (this.settings.safetyScanSeconds > 0) this.settings.safetyScanSeconds = Math.max(30, this.settings.safetyScanSeconds);
     this.status = 'stopped';
     this.lifecycle = 0;
     this.changeCount = 0;
@@ -29,7 +36,10 @@ class VaultWatchModule {
     this.statusEl.title = 'Vault Watch：Windows 原生文件通知';
     this.host.addCommand({ id: 'reconcile-now', name: '核对外部文件变化', callback: () => {
       if (!this.reconciler) return void new Notice('请先启用 Vault Watch 原生监听。');
-      this.reconciler.rescan('manual').then(done => new Notice(done ? 'Vault Watch：核对完成。' : 'Vault Watch：当前未连接，稍后再试。')).catch(() => this.fail());
+      this.reconciler.rescan('manual').then(async done => {
+        if (done) await this.editorRefresh?.refreshOpen();
+        new Notice(done ? 'Vault Watch：核对完成；有本地编辑的笔记会保留输入。' : 'Vault Watch：当前未连接，稍后再试。');
+      }).catch(() => this.fail());
     }});
     this.host.addCommand({ id: 'restart-watcher', name: '重启原生监听', callback: () => void this.restart() });
     this.host.addCommand({ id: 'toggle-watcher', name: '启用／暂停原生监听', callback: async () => {
@@ -38,21 +48,20 @@ class VaultWatchModule {
       await this.restart();
     }});
     this.host.app.workspace.onLayoutReady(() => { if (!this.unloaded) void this.restart(); });
-    // 安全网：SMB 根监听不下发子目录文件的内容修改通知（TrueNAS 实测），
-    // 低频全量核对把内容更新的最坏滞留压到一个周期内。
-    if (typeof setInterval === 'function') {
-      this._safetyTimer = setInterval(() => {
-        if (!this.unloaded && this.settings.enabled && this.reconciler) {
-          void this.reconciler.rescan('safety').catch(() => this.fail());
-        }
-      }, 180000);
-      this._safetyTimer.unref?.();
+    if (typeof this.host.app.workspace.on === 'function' && typeof this.host.registerEvent === 'function') {
+      this.host.registerEvent(this.host.app.workspace.on('editor-change', editor => this.editorRefresh?.markEdited(editor)));
+      this.host.registerEvent(this.host.app.workspace.on('file-open', () => { void this.editorRefresh?.refreshActive(); }));
+      this.host.registerEvent(this.host.app.workspace.on('active-leaf-change', () => { void this.editorRefresh?.refreshActive(); }));
     }
     this.renderStatus();
   }
 
   async restart() {
     const lifecycle = ++this.lifecycle;
+    this.online = false;
+    this.stopTimers();
+    this.editorRefresh?.stop();
+    this.editorRefresh = null;
     this.reconciler?.stop();
     this.reconciler = null;
     const previous = this.bridge;
@@ -68,10 +77,21 @@ class VaultWatchModule {
     const root = adapter.getBasePath();
     const helperPath = path.join(root, this.host.manifest.dir || normalizePath(`${this.host.app.vault.configDir}/plugins/${this.host.manifest.id}`), 'native', 'watch.ps1');
     const isCurrent = () => !this.unloaded && lifecycle === this.lifecycle;
+    const refresh = new EditorRefresh({ app: this.host.app, isCurrent, normalizePath,
+      onConflict: () => {
+        const now = Date.now();
+        if (!this.lastConflictAt || now - this.lastConflictAt > 30000) {
+          this.lastConflictAt = now;
+          new Notice('Vault Watch：检测到本地编辑与磁盘内容不同，已保留你的输入。');
+        }
+      },
+      onError: info => { if (isCurrent()) this.lastErrorCode = info.code; }
+    });
+    this.editorRefresh = refresh;
     let engineStarted = false;
     const engine = new Reconciler({ root, debounceMs: this.settings.debounceMs,
       getLoadedPaths: () => this.host.app.vault.getAllLoadedFiles().map(file => file.path).filter(p => p && p !== '/'),
-      applyPath: createApplyPath(adapter, normalizePath, isCurrent, () => this.changeCount++),
+      applyPath: createApplyPath(adapter, normalizePath, isCurrent, relative => { this.changeCount++; refresh.request(relative); }),
       onStatus: info => {
         if (isCurrent()) this.setStatus(info.state, info.code || info.errorCode || '');
       }
@@ -81,26 +101,47 @@ class VaultWatchModule {
     this.bridge = bridge;
     this.setStatus('starting');
     const run = promise => Promise.resolve(promise).catch(() => { if (isCurrent()) this.fail(); });
+    const afterScan = promise => {
+      const timerEpoch = this.timerEpoch;
+      return run(Promise.resolve(promise).then(async done => {
+        if (!isCurrent() || timerEpoch !== this.timerEpoch) return;
+        if (done) await refresh.refreshOpen();
+      }).finally(() => {
+        if (isCurrent() && this.online && timerEpoch === this.timerEpoch) this.startTimers(lifecycle);
+      }));
+    };
     bridge.on('message', message => {
       if (!isCurrent()) return;
       switch (message.type) {
         case 'ready':
-          if (!engineStarted) { engineStarted = true; run(engine.start()); }
-          else run(engine.setOnline(true));
+          this.online = true;
+          refresh.setOnline(true);
+          if (!engineStarted) { engineStarted = true; afterScan(engine.start()); }
+          else afterScan(engine.setOnline(true));
           break;
         case 'change':
           engine.handleEvent({ type: message.kind, path: message.path, oldPath: message.oldPath });
-          if (message.kind === 'update') this.scheduleContentRefresh(message.path);
+          if (message.kind === 'update') refresh.request(message.path);
           break;
         case 'offline':
           engine.setOnline(false);
+          this.online = false;
+          refresh.setOnline(false);
+          this.stopTimers();
           this.setStatus('offline');
           break;
         case 'rescan':
-          run(message.reason === 'reconnected' ? engine.setOnline(true) : engine.rescan(message.reason));
+          if (message.reason === 'reconnected') {
+            this.online = true;
+            refresh.setOnline(true);
+            afterScan(engine.setOnline(true));
+          } else afterScan(engine.rescan(message.reason));
           break;
         case 'error':
           engine.setOnline(false);
+          this.online = false;
+          refresh.setOnline(false);
+          this.stopTimers();
           this.fail('原生监听启动失败，请查看设置页并重启监听。');
           break;
       }
@@ -130,43 +171,43 @@ class VaultWatchModule {
   onunload() {
     this.unloaded = true;
     ++this.lifecycle;
-    if (typeof clearTimeout === 'function') clearTimeout(this._refreshTimer);
-    if (typeof clearInterval === 'function') clearInterval(this._safetyTimer);
+    this.online = false;
+    this.stopTimers();
+    this.editorRefresh?.stop();
     this.reconciler?.stop();
     void this.bridge?.stop();
   }
 
-  // Obsidian 对聚焦中的编辑器会推迟外部修改的重绘（切换笔记后才可见）。
-  // 这里在 update 事件后主动把活动编辑器刷成磁盘最新内容，恢复光标与滚动位置。
-  // vault.read 直读磁盘，不依赖索引生效时机；与原生行为相同，外部写入与
-  // 用户未保存输入竞态时以磁盘为准。
-  scheduleContentRefresh(relative) {
-    clearTimeout(this._refreshTimer);
-    this._refreshTimer = setTimeout(() => {
-      this._refreshTimer = null;
-      void this.refreshActiveEditor(relative);
-    }, 300);
-    this._refreshTimer.unref?.();
+  stopTimers() {
+    ++this.timerEpoch;
+    clearTimeout(this._activeTimer);
+    clearTimeout(this._safetyTimer);
+    this._activeTimer = this._safetyTimer = null;
   }
 
-  async refreshActiveEditor(relative) {
-    try {
-      const app = this.host.app;
-      const leaf = app.workspace.getMostRecentLeaf?.();
-      const view = leaf?.view;
-      if (!view || view.getViewType?.() !== 'markdown' || view.file?.path !== relative) return;
-      if (view.getMode?.() !== 'source' || !view.editor) return; // 阅读视图由 Obsidian 自行刷新
-      const file = app.vault.getAbstractFileByPath(relative);
-      if (!file || file.children) return; // 文件可能已被删除，或路径指向目录
-      const fresh = await app.vault.read(file);
-      const editor = view.editor;
-      if (editor.getValue() === fresh) return;
-      const selections = editor.listSelections();
-      const scroll = editor.getScrollInfo();
-      editor.setValue(fresh);
-      if (selections?.length) { try { editor.setSelections(selections); } catch { /* 光标恢复失败可忽略 */ } }
-      try { editor.scrollIntoView({ from: scroll.to ?? 0, to: scroll.to ?? 0 }); } catch { }
-    } catch { /* 内容刷新失败不影响监听主链路 */ }
+  startTimers(lifecycle) {
+    const timerEpoch = this.timerEpoch;
+    const current = () => !this.unloaded && this.online && this.settings.enabled && lifecycle === this.lifecycle && timerEpoch === this.timerEpoch;
+    if (!current()) return;
+    const arm = (key, seconds, operation) => {
+      if (!seconds || this[key] !== null) return;
+      // Keep a timer slot occupied until the async operation finishes, so no
+      // second scan/read is scheduled while a slow NAS call is in flight.
+      const timer = setTimeout(async () => {
+        if (!current()) return;
+        try { await operation(); } catch { if (current()) this.fail(); }
+        finally {
+          if (current() && this[key] === timer) { this[key] = null; this.startTimers(lifecycle); }
+        }
+      }, seconds * 1000);
+      this[key] = timer;
+      this[key].unref?.();
+    };
+    arm('_activeTimer', this.settings.activeCheckSeconds, () => this.editorRefresh?.refreshActive());
+    arm('_safetyTimer', this.settings.safetyScanSeconds, async () => {
+      const done = await this.reconciler?.rescan('safety');
+      if (done && current()) await this.editorRefresh?.refreshOpen();
+    });
   }
 
   renderSettings(containerEl, rerender = () => { containerEl.empty(); this.renderSettings(containerEl); }) {
@@ -184,7 +225,15 @@ class VaultWatchModule {
       }));
     new Setting(containerEl).setName('当前状态').setDesc(`${LABELS[this.status] || this.status}${this.lastErrorCode ? ` · ${this.lastErrorCode}` : ''}`)
       .addButton(button => button.setButtonText('重启监听').onClick(async () => { await this.restart(); rerender(); }));
-    containerEl.createEl('p', { text: '首次启动、断线恢复或通知溢出时核对文件列表；内容修改每 3 分钟低频核对兜底。' });
+    new Setting(containerEl).setName('活动笔记补查').setDesc('秒；只检查当前打开的编辑笔记，0 为关闭。正在编辑时保留本地输入。')
+      .addSlider(slider => slider.setLimits(0, 30, 1).setValue(this.settings.activeCheckSeconds).setDynamicTooltip().onChange(async value => {
+        this.settings.activeCheckSeconds = value; await this.persist(); await this.restart();
+      }));
+    new Setting(containerEl).setName('全库兜底检查').setDesc('秒；完成一轮后再等待，0 为关闭。未变化的文件不重复更新索引。')
+      .addSlider(slider => slider.setLimits(0, 600, 30).setValue(this.settings.safetyScanSeconds).setDynamicTooltip().onChange(async value => {
+        this.settings.safetyScanSeconds = value; await this.persist(); await this.restart();
+      }));
+    containerEl.createEl('p', { text: '正常按事件更新；漏通知时补查活动笔记并低频核对目录。启动、恢复和手动检查执行完整核对。' });
   }
 }
 

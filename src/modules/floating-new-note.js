@@ -8,9 +8,12 @@ class FloatingNewNoteModule {
     this.host = host;
     this.settings = settings;
     this.persist = persist;
+    this.buttons = new Map();
+    this.unloaded = false;
   }
 
   async onload() {
+    this.unloaded = false;
     this.host.registerEvent(
       this.host.app.workspace.on("layout-change", () => this.injectAll())
     );
@@ -21,16 +24,24 @@ class FloatingNewNoteModule {
   }
 
   injectAll() {
+    if (this.unloaded) return;
     if (typeof this.host.app.workspace.getLeavesOfType !== "function") return;
     if (!this.settings.enabled) {
       this.removeAll();
       return;
     }
     const leaves = this.host.app.workspace.getLeavesOfType("markdown");
+    const containers = new Set(leaves.map((leaf) => leaf.containerEl).filter(Boolean));
+    for (const [container, fab] of this.buttons) {
+      if (!containers.has(container)) {
+        fab.remove();
+        this.buttons.delete(container);
+      }
+    }
     for (const leaf of leaves) {
       const container = leaf.containerEl;
       if (!container) continue;
-      if (container.querySelector(".fab-container")) {
+      if (this.buttons.get(container)?.parentElement === container) {
         this.updateStyles(container);
         continue;
       }
@@ -39,20 +50,25 @@ class FloatingNewNoteModule {
   }
 
   inject(container) {
+    if (this.unloaded || !this.settings.enabled) return;
+    this.buttons.get(container)?.remove();
     const fab = container.createDiv({ cls: "fab-container" });
+    this.buttons.set(container, fab);
     const btn = fab.createDiv({ cls: "fab-btn" });
     setIcon(btn, this.settings.icon);
     btn.addEventListener("click", async (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (this.unloaded || !this.settings.enabled) return;
       const app = this.host.app;
       // 目标目录：active 模式取当前活动笔记的同级目录，取不到时回退到固定文件夹
-      let folder = "";
+      // null 表示没有活动目录；空字符串表示有效的仓库根目录。
+      let folder = null;
       if ((this.settings.targetFolderMode ?? "active") === "active") {
         const active = app.workspace.getActiveFile?.();
         if (active?.parent) folder = active.parent.path === "/" ? "" : active.parent.path;
       }
-      if (!folder) folder = (this.settings.targetFolder || "").replace(/^\/+|\/+$/g, "");
+      if (folder === null) folder = (this.settings.targetFolder || "").replace(/^\/+|\/+$/g, "");
       try {
         if (folder && !app.vault.getAbstractFileByPath(folder)) {
           await app.vault.createFolder(folder);
@@ -74,7 +90,7 @@ class FloatingNewNoteModule {
   }
 
   updateStyles(container) {
-    const fab = container.querySelector(".fab-container");
+    const fab = this.buttons.get(container);
     if (!fab) return;
     const { opacity, hoverBlend, btnOpacity } = this.settings;
     const hoverOpacity = opacity + (btnOpacity - opacity) * hoverBlend;
@@ -95,11 +111,12 @@ class FloatingNewNoteModule {
   }
 
   removeAll() {
-    if (typeof document === "undefined") return;
-    document.querySelectorAll(".fab-container").forEach((el) => el.remove());
+    for (const fab of this.buttons.values()) fab.remove();
+    this.buttons.clear();
   }
 
   onunload() {
+    this.unloaded = true;
     this.removeAll();
   }
 

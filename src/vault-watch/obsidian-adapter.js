@@ -11,7 +11,7 @@ function createApplyPath(adapter, normalizePath, isAlive = () => true, onApplied
       // Obsidian's own queue can be busy when a disconnect or unload arrives.
       if (!isAlive() || !context.isCurrent()) return;
       await adapter.reconcileFile(relative, normalizePath(relative), true);
-      onApplied();
+      onApplied(relative);
     });
   };
 }

@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { Reconciler, normalizeRelativePath } = require('../lib/reconciler');
+const { Reconciler, normalizeRelativePath } = require('../src/vault-watch/reconciler');
 
 function deferred() {
   let resolve;
@@ -357,4 +357,171 @@ test('symlink/junction subtrees never cause reads or reconciliation outside the 
   engine.handleEvent({ type: 'change', path: 'escape/secret.md' });
   await engine.flush();
   assert.deepEqual(applied, []);
+});
+
+test('requests made before a scan starts share its promise and perform one scan', async (t) => {
+  const { root, engine, statuses, applied } = await fixture(t);
+  await fs.writeFile(path.join(root, 'note.md'), 'fixture');
+  const startup = engine.start();
+  const requests = Array.from({ length: 100 }, () => engine.rescan('safety'));
+  assert.ok(requests.every((request) => request === startup));
+  assert.equal(await startup, true);
+  await engine.flush();
+  assert.equal(statuses.filter((status) => status.state === 'scanning').length, 1);
+  assert.deepEqual(applied, ['note.md']);
+});
+
+test('slow scan requests coalesce into one catch-up and real events run before it', async (t) => {
+  const entered = deferred();
+  const release = deferred();
+  const activity = [];
+  let block = false;
+  const wrappedFs = {
+    lstat: (...args) => fs.lstat(...args),
+    readdir: async (...args) => {
+      const result = await fs.readdir(...args);
+      if (block) {
+        block = false;
+        entered.resolve();
+        await release.promise;
+      }
+      return result;
+    },
+  };
+  const hostPaths = new Set();
+  const { root, engine } = await fixture(t, {
+    fs: wrappedFs,
+    getLoadedPaths: () => [...hostPaths],
+    applyPath: async (relative) => {
+      activity.push(`apply:${relative}`);
+      hostPaths.add(relative);
+    },
+    onStatus: ({ state, reason }) => activity.push(`${state}:${reason}`),
+  });
+  await engine.start();
+  activity.length = 0;
+  block = true;
+  const running = engine.rescan('safety');
+  await entered.promise;
+  const requests = Array.from({ length: 100 }, () => engine.rescan('safety'));
+  assert.ok(requests.every((request) => request === requests[0]));
+  assert.notEqual(requests[0], running);
+  await fs.writeFile(path.join(root, 'urgent.md'), 'fixture');
+  engine.handleEvent({ type: 'update', path: 'urgent.md' });
+  release.resolve();
+  await Promise.all([running, ...requests]);
+  await engine.flush();
+  assert.equal(activity.filter((entry) => entry === 'scanning:safety').length, 2);
+  const eventApply = activity.indexOf('apply:urgent.md');
+  const catchUp = activity.lastIndexOf('scanning:safety');
+  assert.ok(eventApply > -1 && eventApply < catchUp, activity.join(', '));
+  assert.equal(activity.filter((entry) => entry === 'apply:urgent.md').length, 1,
+    'catch-up sees the metadata already reconciled by the event');
+});
+
+test('stop and offline discard pending catch-up without applying stale work', async (t) => {
+  for (const action of ['stop', 'offline']) {
+    await t.test(action, async (subtest) => {
+      const entered = deferred();
+      const release = deferred();
+      let block = false;
+      const wrappedFs = {
+        lstat: (...args) => fs.lstat(...args),
+        readdir: async (...args) => {
+          const result = await fs.readdir(...args);
+          if (block) {
+            block = false;
+            entered.resolve();
+            await release.promise;
+          }
+          return result;
+        },
+      };
+      const { root, engine, statuses, applied } = await fixture(subtest, { fs: wrappedFs });
+      await engine.start();
+      statuses.length = 0;
+      await fs.writeFile(path.join(root, 'pending.md'), 'fixture');
+      block = true;
+      const running = engine.rescan('safety');
+      await entered.promise;
+      const catchUp = engine.rescan('manual');
+      if (action === 'stop') engine.stop();
+      else await engine.setOnline(false);
+      assert.equal(await catchUp, false, 'cancelled catch-up does not wait for a stalled NAS');
+      release.resolve();
+      assert.equal(await running, false);
+      await engine.flush();
+      assert.deepEqual(applied, []);
+      assert.equal(statuses.filter((status) => status.state === 'scanning').length, 1);
+    });
+  }
+});
+
+test('periodic scans skip unchanged loaded paths but apply changed or missing index entries', async (t) => {
+  const { root, engine, applied, loaded } = await fixture(t);
+  await fs.mkdir(path.join(root, 'Folder'));
+  await fs.writeFile(path.join(root, 'Folder', 'stable.md'), 'stable');
+  await fs.writeFile(path.join(root, 'changed.md'), 'old');
+  await engine.start();
+  assert.deepEqual(applied, ['changed.md', 'Folder', 'Folder/stable.md']);
+  for (const relative of applied) loaded.add(relative);
+  applied.length = 0;
+  await engine.rescan('safety');
+  await engine.rescan('periodic');
+  assert.deepEqual(applied, []);
+
+  await fs.writeFile(path.join(root, 'changed.md'), 'new and longer content');
+  await engine.rescan('safety');
+  assert.deepEqual(applied, ['changed.md']);
+  applied.length = 0;
+  loaded.delete('Folder/stable.md');
+  await engine.rescan('safety');
+  assert.deepEqual(applied, ['Folder/stable.md'], 'a missing host index entry cannot be skipped');
+});
+
+test('events and recovery scans force apply even when all observed metadata is unchanged', async (t) => {
+  const wrappedFs = {
+    readdir: (...args) => fs.readdir(...args),
+    lstat: async (...args) => {
+      const stat = await fs.lstat(...args);
+      // Model a writer/filesystem that preserves every metadata field used by
+      // the shortcut. Only an event or explicit recovery can reveal this case.
+      return Object.assign(stat, { mtimeMs: 1000, ctimeMs: 1000, size: 3 });
+    },
+  };
+  const { root, engine, applied, loaded } = await fixture(t, { fs: wrappedFs });
+  await fs.writeFile(path.join(root, 'note.md'), 'old');
+  await engine.start();
+  loaded.add('note.md');
+  applied.length = 0;
+  await fs.writeFile(path.join(root, 'note.md'), 'new');
+  await engine.rescan('safety');
+  assert.deepEqual(applied, []);
+  engine.handleEvent({ type: 'update', path: 'note.md' });
+  await engine.flush();
+  assert.deepEqual(applied, ['note.md']);
+  for (const reason of ['manual', 'overflow']) {
+    applied.length = 0;
+    await engine.rescan(reason);
+    assert.deepEqual(applied, ['note.md'], reason);
+  }
+  applied.length = 0;
+  await engine.setOnline(false);
+  await engine.setOnline(true);
+  assert.deepEqual(applied, ['note.md'], 'reconnect forces a full recovery');
+});
+
+test('a manual request upgrades a queued periodic scan instead of being lost to its cache', async (t) => {
+  const { root, engine, applied, loaded, statuses } = await fixture(t);
+  await fs.writeFile(path.join(root, 'note.md'), 'fixture');
+  await engine.start();
+  loaded.add('note.md');
+  applied.length = 0;
+  statuses.length = 0;
+  const periodic = engine.rescan('safety');
+  const manual = engine.rescan('manual');
+  assert.equal(periodic, manual);
+  await manual;
+  assert.deepEqual(applied, ['note.md']);
+  assert.equal(statuses.filter((status) => status.state === 'scanning').length, 1);
 });

@@ -6,8 +6,8 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const { setTimeout: sleep } = require('node:timers/promises');
-const { NativeBridge } = require('../lib/native-bridge');
-const { Reconciler } = require('../lib/reconciler');
+const { NativeBridge } = require('../src/vault-watch/native-bridge');
+const { Reconciler } = require('../src/vault-watch/reconciler');
 
 test('native bridge and reconciler keep a disk-backed mock index current end to end', {
   skip: process.platform !== 'win32',

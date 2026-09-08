@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
-const { NativeBridge } = require('../lib/native-bridge');
+const { NativeBridge } = require('../src/vault-watch/native-bridge');
 
 function fakeProcess() {
   const child = new EventEmitter();

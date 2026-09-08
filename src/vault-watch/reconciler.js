@@ -53,6 +53,9 @@ class Reconciler {
     this._timer = null;
     this._tail = Promise.resolve(false);
     this._lastQueued = this._tail;
+    this._scan = null;
+    this._scanAgain = null;
+    this._observed = new Map();
   }
 
   start() {
@@ -106,14 +109,62 @@ class Reconciler {
     return accepted;
   }
 
-  /** Startup, reconnect, overflow and explicit manual scans; never periodic. */
+  /** Share queued scans; a running scan may have only one pending catch-up. */
   rescan(reason = 'manual') {
     if (!this.running || !this.online) return Promise.resolve(false);
-    const epoch = this._epoch;
-    return this._enqueue(() => this._fullScan(epoch, reason), epoch, reason);
+    const force = ['startup', 'reconnect', 'manual', 'overflow', 'retry'].includes(reason);
+    if (this._scan) {
+      if (!this._scan.started) {
+        this._scan.force ||= force;
+        return this._scan.promise;
+      }
+      this._scanAgain ||= this._scanTicket(reason, force);
+      this._scanAgain.force ||= force;
+      return this._scanAgain.promise;
+    }
+    const ticket = this._scanTicket(reason, force);
+    this._queueScan(ticket);
+    return ticket.promise;
   }
 
-  async _fullScan(epoch, reason) {
+  _scanTicket(reason, force) {
+    const ticket = { epoch: this._epoch, reason, force, started: false };
+    ticket.promise = new Promise((resolve, reject) => {
+      ticket.resolve = resolve;
+      ticket.reject = reject;
+    });
+    return ticket;
+  }
+
+  _queueScan(ticket) {
+    this._scan = ticket;
+    const queued = this._enqueue(() => {
+      ticket.started = true;
+      return this._fullScan(ticket.epoch, ticket.reason, ticket.force);
+    }, ticket.epoch, ticket.reason);
+    // Schedule catch-up after the running scan, never ahead of accumulated
+    // real events. A slow NAS therefore cannot build an unbounded scan queue.
+    queued.then((result) => this._finishScan(ticket, null, result),
+      (error) => this._finishScan(ticket, error));
+  }
+
+  _finishScan(ticket, error, result) {
+    if (this._scan === ticket) {
+      this._scan = null;
+      const next = this._scanAgain;
+      this._scanAgain = null;
+      if (next && this._active(next.epoch)) {
+        void this._drainPending().catch(() => {});
+        this._queueScan(next);
+      } else if (next) {
+        next.resolve(false);
+      }
+    }
+    if (error) ticket.reject(error);
+    else ticket.resolve(result);
+  }
+
+  async _fullScan(epoch, reason, force = false) {
     this._status({ state: 'scanning', reason });
     const snapshot = await this._snapshot(null, epoch);
     if (!snapshot || !this._active(epoch)) return false;
@@ -121,8 +172,11 @@ class Reconciler {
     await this._assertRoot();
     if (!this._active(epoch)) return false;
     const loaded = this._loadedPaths();
-    await this._applySnapshot(snapshot, loaded, epoch);
+    await this._applySnapshot(snapshot, loaded, epoch, force);
     if (!this._active(epoch)) return false;
+    for (const observed of this._observed.keys()) {
+      if (!snapshot.has(observed)) this._observed.delete(observed);
+    }
     this._status({ state: 'watching', reason });
     return true;
   }
@@ -140,6 +194,12 @@ class Reconciler {
     this._epoch += 1;
     this._pending.clear();
     this._clearTimer();
+    this._scanAgain?.resolve(false);
+    this._scanAgain = null;
+    this._scan = null;
+    // Reconnect must recover missed events even when filesystem timestamps
+    // were preserved. The cache is only a best-effort periodic-scan shortcut.
+    this._observed.clear();
   }
 
   _clearTimer() {
@@ -200,7 +260,7 @@ class Reconciler {
             // One delayed complete retry recovers it without a polling loop.
             await new Promise((resolve) => setTimeout(resolve, 100));
             if (!this._active(epoch)) return false;
-            operation = () => this._fullScan(epoch, 'retry');
+            operation = () => this._fullScan(epoch, 'retry', true);
             continue;
           }
           this._status({ state: 'error', reason, code: error.code || 'RECONCILE_FAILED' });
@@ -244,8 +304,12 @@ class Reconciler {
       if (stat.isSymbolicLink()) return { kind: 'ignored' };
       if (count < segments.length && !stat.isDirectory()) return { kind: 'missing' };
     }
-    if (stat.isDirectory()) return { kind: 'directory' };
-    if (stat.isFile()) return { kind: 'file' };
+    const kind = stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : 'ignored';
+    if (kind !== 'ignored') {
+      const metadata = [stat.mtimeMs, stat.ctimeMs, stat.size];
+      const signature = metadata.every(Number.isFinite) ? `${kind}:${metadata.join(':')}` : null;
+      return { kind, signature };
+    }
     return { kind: 'ignored' };
   }
 
@@ -299,7 +363,7 @@ class Reconciler {
     return snapshot;
   }
 
-  async _applySnapshot(snapshot, loaded, epoch) {
+  async _applySnapshot(snapshot, loaded, epoch, force = false) {
     // Remove children before missing parents; create parents before children.
     const missing = [...loaded].filter((relative) => !snapshot.has(relative))
       .sort((a, b) => depth(b) - depth(a) || a.localeCompare(b));
@@ -312,6 +376,7 @@ class Reconciler {
       if (!this._active(epoch)) return;
       if (info.kind === 'ignored') continue;
       await this.applyPath(relative, { isCurrent: () => this._active(epoch) });
+      if (this._active(epoch)) this._remember(relative, info);
     }
     for (const relative of present) {
       if (!this._active(epoch)) return;
@@ -321,7 +386,22 @@ class Reconciler {
       if (info.kind === 'ignored') continue;
       if (info.kind === 'missing') await this._assertRoot();
       if (!this._active(epoch)) return;
+      if (!force && loaded.has(relative) && info.signature !== null &&
+        info.signature !== undefined && this._observed.get(relative) === info.signature) continue;
       await this.applyPath(relative, { isCurrent: () => this._active(epoch) });
+      if (this._active(epoch)) this._remember(relative, info);
+    }
+  }
+
+  _remember(relative, info) {
+    if (info.kind === 'missing') {
+      for (const observed of this._observed.keys()) {
+        if (observed === relative || observed.startsWith(`${relative}/`)) this._observed.delete(observed);
+      }
+    } else if (info.signature !== null && info.signature !== undefined) {
+      this._observed.set(relative, info.signature);
+    } else {
+      this._observed.delete(relative);
     }
   }
 
@@ -348,7 +428,9 @@ class Reconciler {
     await this._assertRoot();
     if (!this._active(epoch)) return false;
     for (const plan of plans) {
-      await this._applySnapshot(plan.snapshot, plan.loaded, epoch);
+      // Events remain authoritative even when an external writer restores
+      // timestamps or writes an equal-length replacement.
+      await this._applySnapshot(plan.snapshot, plan.loaded, epoch, true);
       if (!this._active(epoch)) return false;
     }
     this._status({ state: 'watching', reason: 'events' });

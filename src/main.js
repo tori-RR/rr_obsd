@@ -2,7 +2,7 @@
 // RR Obsd Toolbox — 主入口：三个功能模块的宿主与统一设置面板。
 // 模块：表格行号（trn）/ 悬浮新建笔记（fnn）/ Vault Watch 原生监听（vw）。
 const { Plugin, PluginSettingTab, normalizePath } = require('obsidian');
-const { VaultWatchModule } = require('./modules/vault-watch');
+const { VaultWatchModule, VAULT_WATCH_DEFAULTS } = require('./modules/vault-watch');
 const { TableRowNumberModule } = require('./modules/table-row-number');
 const { FloatingNewNoteModule } = require('./modules/floating-new-note');
 
@@ -32,7 +32,7 @@ const DEFAULTS = {
     debugHoverScale: 1.12,
     debugActiveScale: 0.9
   },
-  vw: { enabled: true, showStatus: true, debounceMs: 200 }
+  vw: { ...VAULT_WATCH_DEFAULTS }
 };
 
 module.exports = class RRObsdToolbox extends Plugin {

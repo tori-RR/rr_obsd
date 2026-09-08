@@ -1,9 +1,0 @@
-{
-  "id": "floating-new-note",
-  "name": "Floating New Note",
-  "version": "1.3.0",
-  "minAppVersion": "1.0.0",
-  "description": "在编辑区左下角添加悬浮新建笔记按钮，鼠标靠近显示",
-  "author": "tori",
-  "isDesktopOnly": false
-}

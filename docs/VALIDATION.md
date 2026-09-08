@@ -1,49 +1,79 @@
 # Validation
 
-## Evidence boundary
+## Current revision: 0.3.0
 
-This is a preview release. The following evidence distinguishes notification transport, reconciliation logic, and actual Obsidian UI behavior.
+Validated on 2026-09-08 using Windows, Node.js 26.6.0, Windows PowerShell 5.1, and Obsidian app/installer 1.13.7. The source was base commit `ae76100cc9aa3227be2c8831e69370033306d1c3` plus the uncommitted 0.3.0 repair; the base commit alone does not identify this build.
 
-| Layer | Result |
+| Check | Result |
 | --- | --- |
-| Windows .NET native notification on a TrueNAS SMB share | Earlier scoped diagnostic passed exact create/update/delete events for three temporary files; all probes cleaned up |
-| Obsidian 1.13.7 internal adapter | Method bodies and plugin directory format inspected read-only in the running application |
-| Native helper on local Windows filesystem | Automated real-process tests cover changes, renames, burst, loss/reconnect and exit |
-| JavaScript reconciliation | Automated tests cover ordering, directory descendants, offline cancellation, failed traversal and path boundaries |
-| Full helper → bridge → engine chain | Automated test uses real PowerShell and a disk-backed simulated index in a temporary local vault |
-| Plugin installed in an actual Obsidian vault | **Not yet verified** |
-| Actual open-note and file-explorer UI refresh | **Not yet verified** |
-| NAS-side or Linux/NFS-side writes | **Not yet verified** |
+| `npm run check`: syntax, tests and build | Passed: **91 tests, 0 failures, 0 skips**; build succeeded |
+| `npm run package`: complete archive inventory | Passed; SHA-256 is printed by the command for the generated archive |
+| Complete installation includes `native/watch.ps1` | Passed; installed plugin 0.3.0, matching built `main.js`, helper running |
+| Clean open note receives external changes without reopening | Passed in the actual focused editor and rendered CodeMirror DOM |
+| Typing during a pending read retains local input | Passed in the actual editor; dirty/saving/IME and split-view cases also covered by automated tests |
+| File switch, pause, restart and unload cancel stale refresh work | Passed in the actual editor; helper released on pause/unload and restarted successfully |
+| File/folder create, rename and delete reach the index/file explorer | Passed for file creation and directory creation/rename/deletion in the actual UI; file rename covered by automated tests |
+| Active-note fallback with a missing native content event | Passed with this plugin's notifications suppressed for the test note; confirmed the fallback applied the refresh |
+| NAS-side or Linux/NFS-side writes | **Not yet verified for this revision** |
+| Floating New Note destination and ownership | Actual button created beside the active test note; root destination, ownership and unload cleanup passed automated tests |
 
-Initial local validation (2026-09-08): Windows, Node.js 26.6.0, system Windows PowerShell 5.1. `npm run check` passed all **39 tests**, with no failures or skips, and built the plugin successfully. Tests do not require the user's vault, NAS address, credentials, or note contents. No production installation is performed by build or test scripts.
+Build identity and packaging:
 
-## Automated checks
+- Built `main.js` SHA-256: `1b3f3cb4d91d5fe2d2056bbf9660b64736bb06b4bf9bef96ef28ec4aca7285bf`.
+- Archive: `dist/rr_obsd-0.3.0.zip`. Its `rr_obsd/` directory contains `main.js`, `manifest.json`, `styles.css`, `versions.json`, `README.md`, `LICENSE`, `CHANGELOG.md`, `native/watch.ps1`, and all four documents in `docs/`.
+- The archive hash is recorded by the packaging command outside the archive to avoid a self-referential checksum. Repackaging may change ZIP metadata and its hash without changing runtime code.
 
-Run `npm test` on Windows. The tests use Node's built-in runner and clean up their own scoped temporary directories and helper processes. Non-Windows runs skip native-process integration tests.
+The opt-in `scripts/obsidian-live-acceptance.cjs` completed **9/9 checks** against an actual Obsidian session and TrueNAS SMB vault, from 03:58:11 to 03:58:27 UTC. All writes used the Windows SMB client and a unique child of the user's authorized scratch directory. The script checked real view objects, rendered editor content and file-explorer entries, and exercised typing/file-switch/pause/unload races with controlled pending reads. The missing-event check suppressed this plugin's events for one disposable note and used a shorter in-memory fallback interval; it validates the fallback path, not a fixed production latency guarantee.
 
-- Real file and folder create, modification, rename, nested rename, and deletion; Unicode and shell-special filename characters.
-- A burst of 800 creates must either deliver all creates or explicitly report overflow requiring reconciliation; subsequent events must still arrive.
-- Root disappearance must report offline without fabricating file deletions; restoration must reattach and request a rescan.
-- Closing stdin or ending the designated parent must release the helper.
-- Fragmented JSON, heartbeat separation, process restart, invalid-output diagnostics, and unload during startup.
-- Parent-first creation, child-first removal, case-only rename preservation and duplicate event coalescing.
-- Failed or changing enumeration, failed stat, disconnect and obsolete host-queue callbacks.
-- Ignored hidden directories, rejected path traversal and excluded junction/symlink subtrees.
-- Real helper → bridge → engine processing of startup state, edits, file/folder renames and deletes; no further index updates after stop.
-- The actual plugin entry point with a simulated host: event routing, live settings, plugin-directory resolution, pause/unload cancellation, and incompatible adapter rejection.
+Each UI check took between 54 ms and 5.85 s, including deliberate waits and multiple actions. These are check durations, not measured notification latencies. The native creation check took 466 ms and the focused-editor check took 1.63 s including a 1.5 s integrity wait.
 
-`npm run build` checks manifest/package version equality and bundles the actual entry point. `npm run package` includes `main.js`, `manifest.json`, `native/watch.ps1`, README, license, changelog and documentation in the installable ZIP.
+The scratch directory and its index entries were removed. The script restored the original tab and in-memory settings, and the installed `data.json` matched the pre-repair backup byte for byte. A rollback copy of the installed plugin and a Git bundle of the previous source were retained outside the repository.
 
-## Manual acceptance before production use
+Limitations: actual root-level creation and IME composition were not exercised in the personal vault; their guards have automated coverage. No production NAS disconnection, NAS-local/Linux/NFS write, or simultaneous multi-client save/merge experiment was performed. Preserving input during refresh does not replace Obsidian's ordinary save/conflict behavior or provide conflict merging.
 
-Use an independent test vault with the same storage path style as the intended vault. Keep a copy of any existing plugin directory before upgrades.
+## Historical evidence
 
-1. Install and enable the plugin. Confirm status progresses to watching.
-2. Open a disposable Markdown note in Obsidian. Change its text using the actual external editing tool; verify the visible text and metadata update without reopening the vault.
-3. Externally create a note and nested folder, rename the file and parent folder, and remove only those disposable test entries. Verify Obsidian's file explorer matches the disk after each step.
-4. Exercise the AI's actual write path. A Windows SMB write and a NAS-local/Linux write can have different notification behavior.
-5. Pause the plugin, confirm its helper exits, then re-enable it and verify changes made while paused are reconciled.
-6. With only the test vault in use, simulate connection loss. Confirm the UI reports waiting, existing index entries are retained, and restoration triggers reconciliation.
-7. Close the test vault and confirm its helper exits. Repeat in each supported Obsidian version after upgrades.
+The following was carried forward from standalone Vault Watch 0.1.0's validation record. It provides provenance, not acceptance of the current implementation:
 
-Do not infer actual UI acceptance from a passing simulated-index test. Any future manual test result should record the Obsidian version, path style, external write origin, exact actions, and observed UI behavior without committing private paths or note content.
+- On 2026-09-08, a scoped Windows .NET diagnostic on a TrueNAS SMB share reported create/update/delete events for three temporary files and recorded cleanup.
+- Obsidian 1.13.7 adapter method bodies and plugin-directory resolution were inspected in the running application.
+- The initial local Windows validation used Node.js 26.6.0 and system Windows PowerShell 5.1. Its `npm run check` recorded **39 passing tests**, no failures or skips, and a successful build.
+- That record explicitly left installed-plugin UI acceptance and NAS-local/Linux/NFS write behavior unverified.
+
+The original document is recoverable from the commits in [LEGACY-PLUGINS.md](LEGACY-PLUGINS.md). Do not combine an earlier native-notification probe, a simulated editor and a current build into a claim of end-to-end UI verification.
+
+## Automated verification
+
+Run `npm run check` and `npm run package` from the repository root. Tests use Node's built-in runner and unique temporary directories. Windows runs exercise the real PowerShell helper; other platforms skip those process tests. Syntax checking includes the opt-in UI acceptance script, but the ordinary test/build commands do not run it or modify a personal vault.
+
+The final test review should cover:
+
+- Real file and folder events, Unicode filenames, nested renames, burst/overflow, disconnect/reconnect and helper exit.
+- Native bridge protocol framing, retry cancellation and invalid-output handling.
+- Reconciliation ordering, rejected paths, incomplete scans, inaccessible roots and obsolete queued callbacks.
+- Full-scan coalescing, metadata-only periodic updates and forced recovery/manual scans.
+- Clean editor refresh, dirty/saving refusal, unknown baselines, typing during a read, file/editor identity changes and lifecycle invalidation.
+- Per-file event coalescing, the active-note-only fallback and timers that stop with the module.
+- Root-directory note creation, fallback destinations and cleanup of only the module's own UI resources.
+
+Simulated-host tests verify the scheduling and safety contracts they model. Real-process tests with a disk-backed mock index verify transport and reconciliation. Neither proves the actual Obsidian editor's internal API behavior.
+
+The installable ZIP must contain `main.js`, `manifest.json`, `styles.css` and `native/watch.ps1`, along with the release documentation and metadata. Build/test scripts do not perform production deployment.
+
+## Scoped UI acceptance
+
+Use an independent vault or a unique disposable directory within a location explicitly authorized by the user. Save a rollback copy of the installed plugin before replacing it. Existing authorization for one scratch location does not extend testing to unrelated notes or NAS configuration.
+
+The optional UI script exports `start(app, { expectedVaultRoot, scratchParent, allowWrites: true })` and `status()`. Load it through Obsidian's developer environment, supplying the exact active vault root and an existing authorized parent relative to that root. It creates its own unique child, temporarily pauses/reloads this plugin, restores settings and the original tab, and removes only that child after validating its resolved path. It is intentionally excluded from ordinary automated tests and the installable runtime.
+
+1. Install the complete plugin and confirm the helper starts. Record the exact app/installer version and plugin revision.
+2. Open a disposable Markdown note, edit it externally through the actual AI/tool write path, and verify visible text without switching notes or reopening the vault.
+3. With unsaved local input, repeat an external change. Confirm the refresh preserves the input and reports the conflict. Also type or switch files while an asynchronous read is pending.
+4. Modify two open notes in quick succession. Verify per-file scheduling, then test the active-note fallback independently of native update delivery.
+5. Create a file and nested folder, rename the file and parent, and delete only those disposable entries. Compare the visible tree with disk.
+6. Observe a periodic scan and a forced manual scan. Record elapsed time without asserting an unconditional 5-second or 180-second delivery bound.
+7. Pause, restart and unload the module during pending work. Check helper/timer cleanup and absence of stale editor updates.
+8. Check root-level Floating New Note creation and independent module toggles. Ensure another module's or plugin's buttons remain intact.
+9. Remove only the unique test directory after confirming its absolute path and contents. Record cleanup and any files retained for review.
+
+Network-loss testing must be scoped to the test fixture or separately authorized; do not disconnect shared production services just to complete the checklist. SMB-client and NAS-local/Linux writes can have different notification behavior, so record the origin actually tested.
